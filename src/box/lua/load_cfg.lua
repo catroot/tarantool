@@ -21,7 +21,8 @@ local default_sophia_cfg = {
     memory_limit = 0,
     threads      = 5,
     node_size    = 134217728,
-    page_size    = 131072
+    page_size    = 131072,
+    compression  = "none"
 }
 
 -- all available options
@@ -30,7 +31,7 @@ local default_cfg = {
     slab_alloc_arena    = 1.0,
     slab_alloc_minimal  = 64,
     slab_alloc_maximal  = 1024 * 1024,
-    slab_alloc_factor   = 2.0,
+    slab_alloc_factor   = 1.1,
     work_dir            = nil,
     snap_dir            = ".",
     wal_dir             = ".",
@@ -65,7 +66,8 @@ local sophia_template_cfg = {
     memory_limit = 'number',
     threads      = 'number',
     node_size    = 'number',
-    page_size    = 'number'
+    page_size    = 'number',
+    compression  = 'string'
 }
 
 -- types of available options

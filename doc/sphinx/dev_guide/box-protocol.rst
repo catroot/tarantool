@@ -4,6 +4,8 @@
 :url: doc/box-protocol.html
 :template: documentation_rst
 
+.. _iproto protocol:
+
 --------------------------------------------------------------------------------
                                IProto Protocol
 --------------------------------------------------------------------------------
@@ -48,7 +50,7 @@ MsgPack data types:
 IPROTO is a binary request/response protocol.
 
 ================================================================================
-                         Greeting Package
+                                 Greeting Packet
 ================================================================================
 
 .. code-block:: bash
@@ -73,7 +75,7 @@ second 44 bytes contain a base64-encoded random string, to use in authentificati
 packet. And it ends with 20 bytes of spaces.
 
 ================================================================================
-                         Unified package structure
+                         Unified packet structure
 ================================================================================
 
 Once a greeting is read, the protocol becomes pure request/response and features
@@ -88,7 +90,7 @@ http://msgpack.org
 
 Tarantool protocol mandates use of a few integer constants serving as keys in
 maps used in the protocol. These constants are defined in `src/box/iproto_constants.h
-<https://github.com/tarantool/tarantool/blob/master/src/iproto_constants.h>`_
+<https://github.com/tarantool/tarantool/blob/master/src/box/iproto_constants.h>`_
 
 Let's list them here too:
 
@@ -121,7 +123,7 @@ Let's list them here too:
     <delete>  ::= 0x05
     <call>    ::= 0x06
     <auth>    ::= 0x07
-    <eval>    ::= 0x80
+    <eval>    ::= 0x08
     -- Admin command codes
     <ping>    ::= 0x40
 
@@ -418,8 +420,8 @@ Error message is present in the response only if there is an error :code:`<error
 expects as value a msgpack string
 
 Convenience macros which define hexadecimal constants for return codes
-can be found in `src/errcode.h
-<https://github.com/tarantool/tarantool/blob/master/src/errcode.h>`_
+can be found in `src/box/errcode.h
+<https://github.com/tarantool/tarantool/blob/master/src/box/errcode.h>`_
 
 ================================================================================
                          Replication packet structure

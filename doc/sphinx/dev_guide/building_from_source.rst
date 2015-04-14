@@ -1,4 +1,4 @@
-.. include:: ../directives.rst
+.. _building-from-source:
 
 -------------------------------------------------------------------------------
                              Building from source

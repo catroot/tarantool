@@ -1,5 +1,4 @@
-.. include:: ../../directives.rst
-.. highlight:: lua
+.. _box-authentication:
 
 -------------------------------------------------------------------------------
                     Authentication and authorization
@@ -90,9 +89,10 @@ functions for insert or update or delete - the _user space is special so
 there are special functions which have appropriate error checking.
 
 To create a new user, say ``box.schema.user.create(user-name)`` or
+``box.schema.user.create(user-name, {if_not_exists=true})`` or
 ``box.schema.user.create(user-name, {password=password})``. The form
 ``box.schema.user.create(user-name, {password=password})`` is better because
-in a `URI`_ (Uniform Resource Identifier) it is usually illegal to include a
+in a :ref:`URI` (Uniform Resource Identifier) it is usually illegal to include a
 user-name without a password.
 
 To change the current user's password, say ``box.schema.user.passwd(password)``.
@@ -126,8 +126,6 @@ selects a tuple in the ``_user`` space, and then drops the user.
 .. NOTE::
 
     The maximum number of users is 32.
-
-.. _URI: :ref:`URI`
 
 ===========================================================
                Priveleges and _priv space
@@ -182,7 +180,7 @@ create Lua functions in the usual way, by saying
 that their names can be used within grant/revoke functions.
 
 The function for creating a ``_func`` tuple is:
-``box.schema.func.create(function-name)``.
+``box.schema.func.create(function-name [, {if_not_exists=true} ])``.
 
 The function for dropping a ``_func`` tuple is:
 ``box.schema.func.drop(function-name)``.
@@ -227,16 +225,15 @@ purposes are:
     box.session.su(user-name) -- allows changing current user to 'user-name'
 
 If a user types requests directly on the Tarantool server in its interactive
-mode, or if a user connects via telnet to the administrative port (using `admin`_
+mode, or if a user connects via telnet to the administrative port (using :ref:`admin <admin_port>`
 instead of listen), then the user by default is 'admin' and has many privileges.
-If a user connects from an application program via one of the `connectors`_, then
+If a user connects from an application program via one of the :ref:`connectors <box-connectors>`, then
 the user by default is 'guest' and has few privileges. Typically an admin user
 will set up and configure objects, then grant privileges to appropriate non-admin
 users. Typically a guest user will use ``box.session.su()`` to change into a non-generic
 user to whom admin has granted more than the default privileges. For example,
 admin might say:
 
-.. _admin: :ref:`admin_port
 .. _connectors: :doc:`../connectors/index`
 
 .. code-block:: lua
@@ -271,7 +268,7 @@ or indirectly.
 
 .. module:: box.schema.role
 
-.. function:: create(role-name)
+.. function:: create(role-name [, {if_not_exists=true} ] )
 
     Create a new role.
 

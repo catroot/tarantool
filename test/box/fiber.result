@@ -141,7 +141,7 @@ space:insert{1953719668, 'old', 1684234849}
 -- test that insert produces a duplicate key error
 space:insert{1953719668, 'old', 1684234849}
 ---
-- error: Duplicate key exists in unique index 'primary'
+- error: Duplicate key exists in unique index 'primary' in space 'tweedledum'
 ...
 space:update(1953719668, {{'=', 1, 1953719668}, {'=', 2, 'new'}})
 ---
@@ -779,6 +779,24 @@ for fid, i in pairs(fiber.info()) do if i.name == 'zombie' then zombie = true en
 zombie
 ---
 - false
+...
+-- test case for gh-778 - fiber.id() on a dead fiber
+f =  fiber.create(function() end)
+---
+...
+id = f:id()
+---
+...
+fiber.sleep(0)
+---
+...
+f:status() 
+---
+- dead
+...
+id == f:id()
+---
+- true
 ...
 fiber = nil
 ---

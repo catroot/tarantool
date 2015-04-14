@@ -799,3 +799,47 @@ box.schema.role.exists(0)
 ---
 - false
 ...
+box.schema.role.create('public', { if_not_exists = true})
+---
+...
+box.schema.user.create('admin', { if_not_exists = true})
+---
+...
+box.schema.user.create('guest', { if_not_exists = true})
+---
+...
+box.schema.user.create('test', { if_not_exists = true})
+---
+...
+box.schema.user.create('test', { if_not_exists = true})
+---
+...
+box.schema.role.drop('test', { if_not_exists = true})
+---
+- error: Illegal parameters, options parameter 'if_not_exists' is unexpected
+...
+box.schema.role.drop('test', { if_exists = true})
+---
+...
+box.schema.role.create('test', { if_not_exists = true})
+---
+...
+box.schema.role.create('test', { if_not_exists = true})
+---
+...
+box.schema.user.drop('test', { if_not_exists = true})
+---
+- error: Illegal parameters, options parameter 'if_not_exists' is unexpected
+...
+-- gh-664 roles: accepting bad syntax for create
+box.schema.role.create('role', 'role')
+---
+- error: Illegal parameters, options should be a table
+...
+box.schema.role.drop('role', 'role')
+---
+- error: Illegal parameters, options should be a table
+...
+box.schema.user.drop('test', { if_exists = true})
+---
+...

@@ -4,11 +4,13 @@
 
 .. toctree::
     :maxdepth: 2
+    :numbered:
+    :caption: Table of Contents
 
     intro
     box/index
-    replication
-    configuration
+    replication/index
+    configuration/index
     administration
     connectors/index
     app_a_errcodes

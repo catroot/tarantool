@@ -30,6 +30,7 @@
  */
 #include <stdbool.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
 
 #include "trivia/util.h"
 #include "third_party/tarantool_ev.h"
@@ -133,7 +134,8 @@ recovery_has_data(struct recovery_state *r)
 	       vclockset_first(&r->wal_dir.index) != NULL;
 }
 void recovery_bootstrap(struct recovery_state *r);
-void recover_snap(struct recovery_state *r);
+int
+recover_xlog(struct recovery_state *r, struct xlog *l);
 void recovery_follow_local(struct recovery_state *r,
 			   const char *name,
 			   ev_tstamp wal_dir_rescan_delay);

@@ -75,7 +75,6 @@ int main_argc;
 /** Signals handled after start as part of the event loop. */
 static ev_signal ev_sigs[4];
 static const int ev_sig_count = sizeof(ev_sigs)/sizeof(*ev_sigs);
-static bool start_loop = true;
 
 extern const void *opt_def;
 
@@ -545,7 +544,9 @@ main(int argc, char **argv)
 	start_time = ev_time();
 #ifndef __APPLE__
 	/* set locale to make iswXXXX function work */
-	if (setlocale(LC_CTYPE, "C.UTF-8") == NULL)
+	if (setlocale(LC_CTYPE, "C.UTF-8") == NULL ||
+	    setlocale(LC_CTYPE, "en_US.UTF-8") == NULL ||
+	    setlocale(LC_CTYPE, "en_US.utf8") == NULL)
 		fprintf(stderr, "Failed to set locale to C.UTF-8\n");
 #endif
 	if (argc > 1 && access(argv[1], R_OK) != 0) {

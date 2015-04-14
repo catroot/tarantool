@@ -360,10 +360,15 @@ lbox_commit(lua_State * /* L */)
 	 * Do nothing if transaction is not started,
 	 * it's the same as BEGIN + COMMIT.
 	*/
-	if (txn) {
+	if (! txn)
+		return 0;
+	try {
 		txn_commit(txn);
-		txn_finish(txn);
+	} catch (...) {
+		txn_rollback();
+		throw;
 	}
+	txn_finish(txn);
 	return 0;
 }
 
@@ -473,7 +478,7 @@ SetuidGuard::SetuidGuard(const char *name, uint32_t name_len,
 	 * No special check for ADMIN user is necessary
 	 * since ADMIN has universal access.
 	 */
-	if (orig_credentials->universal_access & PRIV_ALL)
+	if ((orig_credentials->universal_access & PRIV_ALL) == PRIV_ALL)
 		return;
 	access &= ~orig_credentials->universal_access;
 	/*
@@ -522,6 +527,27 @@ SetuidGuard::~SetuidGuard()
 {
 	if (setuid)
 		fiber_set_user(fiber(), orig_credentials);
+}
+
+/**
+ * A quick approximation if a Lua table is an array.
+ *
+ * JSON can only have strings as keys, so if the first
+ * table key is 1, it's definitely not a json map,
+ * and very likely an array.
+ */
+static inline bool
+lua_isarray(struct lua_State *L, int i)
+{
+	if (lua_istable(L, i) == false)
+		return false;
+	lua_pushnil(L);
+	if (lua_next(L, i) == 0) /* the table is empty */
+		return true;
+	bool index_starts_at_1 = lua_isnumber(L, -2) &&
+		lua_tonumber(L, -2) == 1;
+	lua_pop(L, 2);
+	return index_starts_at_1;
 }
 
 /**
@@ -578,7 +604,7 @@ execute_call(lua_State *L, struct request *request, struct obuf *out)
 
 	/** Check if we deal with a table of tables. */
 	int nrets = lua_gettop(L);
-	if (nrets == 1 && lua_istable(L, 1)) {
+	if (nrets == 1 && lua_isarray(L, 1)) {
 		/*
 		 * The table is not empty and consists of tables
 		 * or tuples. Treat each table element as a tuple,
@@ -599,7 +625,7 @@ execute_call(lua_State *L, struct request *request, struct obuf *out)
 		}
 	}
 	for (int i = 1; i <= nrets; ++i) {
-		if (lua_istable(L, i) || lua_istuple(L, i)) {
+		if (lua_isarray(L, i) || lua_istuple(L, i)) {
 			luamp_encode_tuple(L, luaL_msgpack_default, out, i);
 		} else {
 			luamp_encode_array(luaL_msgpack_default, out, 1);
@@ -615,6 +641,13 @@ done:
 void
 box_lua_call(struct request *request, struct obuf *out)
 {
+	auto txn_guard = make_scoped_guard([=] {
+		struct txn *txn = in_txn();
+		if (txn) {
+			say_warn("transaction is active at CALL return");
+			txn_rollback();
+		}
+	});
 	lua_State *L = NULL;
 	try {
 		L = lua_newthread(tarantool_L);

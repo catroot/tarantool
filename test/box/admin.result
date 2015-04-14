@@ -20,15 +20,16 @@ box.cfg
 ---
 - snapshot_count: 6
   too_long_threshold: 0.5
-  slab_alloc_factor: 2
+  slab_alloc_factor: 1.1
   slab_alloc_maximal: 1048576
   background: false
   slab_alloc_arena: 0.1
   sophia:
     page_size: 131072
+    memory_limit: 0
     threads: 5
     node_size: 134217728
-    memory_limit: 0
+    compression: none
   listen: <uri>
   logger_nonblock: true
   snap_dir: .

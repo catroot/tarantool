@@ -26,6 +26,7 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+#include "replication.h"
 #include "sophia_engine.h"
 #include "cfg.h"
 #include "xrow.h"
@@ -34,7 +35,11 @@
 #include "txn.h"
 #include "index.h"
 #include "sophia_index.h"
+#include "recovery.h"
 #include "space.h"
+#include "request.h"
+#include "iproto_constants.h"
+#include "replication.h"
 #include "salad/rlist.h"
 #include <sophia.h>
 #include <stdlib.h>
@@ -71,51 +76,33 @@ void sophia_info(void (*callback)(const char*, const char*, void*), void *arg)
 	sp_destroy(cur);
 }
 
+static struct tuple *
+sophia_replace(struct space *space, struct tuple *old_tuple,
+               struct tuple *new_tuple,
+               enum dup_replace_mode mode)
+{
+	Index *index = index_find(space, 0);
+	return index->replace(old_tuple, new_tuple, mode);
+}
+
 struct SophiaSpace: public Handler {
 	SophiaSpace(Engine*);
 };
 
 SophiaSpace::SophiaSpace(Engine *e)
 	:Handler(e)
-{ }
-
-static void
-sophia_recovery_end(struct space *space)
 {
-	engine_recovery *r = &space->handler->recovery;
-	r->state   = READY_ALL_KEYS;
-	r->replace = sophia_replace;
-	r->recover = space_noop;
-	/*
-	sophia_complete_recovery(space);
-	*/
-}
-
-static void
-sophia_recovery_end_snapshot(struct space *space)
-{
-	engine_recovery *r = &space->handler->recovery;
-	r->state   = READY_PRIMARY_KEY;
-	r->recover = sophia_recovery_end;
-}
-
-static void
-sophia_recovery_begin_snapshot(struct space *space)
-{
-	engine_recovery *r = &space->handler->recovery;
-	r->recover = sophia_recovery_end_snapshot;
+	replace = sophia_replace;
 }
 
 SophiaEngine::SophiaEngine()
 	:Engine("sophia")
 	 ,m_prev_checkpoint_lsn(-1)
 	 ,m_checkpoint_lsn(-1)
+	 ,recovery_complete(0)
 {
 	flags = 0;
 	env = NULL;
-	recovery.state   = READY_NO_KEYS;
-	recovery.recover = sophia_recovery_begin_snapshot;
-	recovery.replace = sophia_replace_recover;
 }
 
 void
@@ -145,24 +132,98 @@ SophiaEngine::open()
 	return new SophiaSpace(this);
 }
 
-void
-SophiaEngine::end_recover_snapshot()
+static inline void
+sophia_send_row(Relay *relay, uint32_t space_id, char *tuple,
+                uint32_t tuple_size)
 {
-	recovery.replace = sophia_replace_recover;
-	recovery.recover = sophia_recovery_end_snapshot;
+	struct recovery_state *r = relay->r;
+	struct request_replace_body body;
+	body.m_body = 0x82; /* map of two elements. */
+	body.k_space_id = IPROTO_SPACE_ID;
+	body.m_space_id = 0xce; /* uint32 */
+	body.v_space_id = mp_bswap_u32(space_id);
+	body.k_tuple = IPROTO_TUPLE;
+	struct xrow_header row;
+	row.type = IPROTO_INSERT;
+	row.server_id = 0;
+	row.lsn = vclock_inc(&r->vclock, row.server_id);
+	row.bodycnt = 2;
+	row.body[0].iov_base = &body;
+	row.body[0].iov_len = sizeof(body);
+	row.body[1].iov_base = tuple;
+	row.body[1].iov_len = tuple_size;
+	relay_send(relay, &row);
 }
 
+/**
+ * Relay all data that should be present in the snapshot
+ * to the replica.
+ */
+void
+SophiaEngine::join(Relay *relay)
+{
+	struct vclock *res = vclockset_last(&relay->r->snap_dir.index);
+	if (res == NULL)
+		tnt_raise(ClientError, ER_MISSING_SNAPSHOT);
+	int64_t signt = vclock_signature(res);
+
+	/* get snapshot object */
+	char id[128];
+	snprintf(id, sizeof(id), "snapshot.%" PRIu64, signt);
+	void *c = sp_ctl(env);
+	void *snapshot = sp_get(c, id);
+	assert(snapshot != NULL);
+
+	/* iterate through a list of databases which took a
+	 * part in the snapshot */
+	void *db_cursor = sp_ctl(snapshot, "db_list");
+	if (db_cursor == NULL)
+		sophia_raise(env);
+	while (sp_get(db_cursor)) {
+		void *db = sp_object(db_cursor);
+
+		/* get space id */
+		void *dbctl = sp_ctl(db);
+		void *oid = sp_get(dbctl, "name");
+		char *name = (char*)sp_get(oid, "value", NULL);
+		char *pe = NULL;
+		uint32_t space_id = strtoul(name, &pe, 10);
+		sp_destroy(oid);
+
+		/* send database */
+		void *o = sp_object(db);
+		void *cursor = sp_cursor(snapshot, o);
+		if (cursor == NULL) {
+			sp_destroy(db_cursor);
+			sophia_raise(env);
+		}
+		while (sp_get(cursor)) {
+			o = sp_object(cursor);
+			uint32_t tuple_size = 0;
+			char *tuple = (char *)sp_get(o, "value", &tuple_size);
+			try {
+				sophia_send_row(relay, space_id, tuple, tuple_size);
+			} catch (...) {
+				sp_destroy(cursor);
+				sp_destroy(db_cursor);
+				throw;
+			}
+		}
+		sp_destroy(cursor);
+	}
+	sp_destroy(db_cursor);
+}
 
 void
-SophiaEngine::end_recovery()
+SophiaEngine::endRecovery()
 {
+	if (recovery_complete)
+		return;
 	/* complete two-phase recovery */
 	int rc = sp_open(env);
 	if (rc == -1)
 		sophia_raise(env);
-	recovery.state   = READY_NO_KEYS;
-	recovery.replace = sophia_replace;
-	recovery.recover = space_noop;
+	recovery_complete = 1;
 }
 
 Index*
@@ -279,8 +340,9 @@ SophiaEngine::commit(struct txn *txn)
 	if (rc == -1)
 		sophia_raise(env);
 	rc = sp_commit(txn->engine_tx);
-	if (rc == -1)
+	if (rc == -1) {
 		sophia_raise(env);
+	}
 	assert(rc == 0);
 }
 
@@ -293,6 +355,14 @@ SophiaEngine::rollback(struct txn *txn)
 	txn->engine_tx = NULL;
 }
 
+void
+SophiaEngine::beginJoin()
+{
+	/* put engine to recovery-complete state to
+	 * correctly support join */
+	endRecovery();
+}
+
 static inline void
 sophia_snapshot(void *env, int64_t lsn)
 {
@@ -301,7 +371,7 @@ sophia_snapshot(void *env, int64_t lsn)
 	int rc = sp_set(c, "scheduler.checkpoint");
 	if (rc == -1)
 		sophia_raise(env);
-	char snapshot[32];
+	char snapshot[128];
 	snprintf(snapshot, sizeof(snapshot), "snapshot.%" PRIu64, lsn);
 	/* ensure snapshot is not already exists */
 	void *o = sp_get(c, snapshot);
@@ -315,19 +385,19 @@ sophia_snapshot(void *env, int64_t lsn)
 }
 
 static inline void
-sophia_snapshot_recover(void *env, int64_t lsn)
+sophia_reference_checkpoint(void *env, int64_t lsn)
 {
 	/* recovered snapshot lsn is >= then last
 	 * engine lsn */
-	char snapshot_lsn[32];
-	snprintf(snapshot_lsn, sizeof(snapshot_lsn), "%" PRIu64, lsn);
+	char checkpoint_id[32];
+	snprintf(checkpoint_id, sizeof(checkpoint_id), "%" PRIu64, lsn);
 	void *c = sp_ctl(env);
-	int rc = sp_set(c, "snapshot", snapshot_lsn);
+	int rc = sp_set(c, "snapshot", checkpoint_id);
 	if (rc == -1)
 		sophia_raise(env);
-	char snapshot[32];
+	char snapshot[128];
 	snprintf(snapshot, sizeof(snapshot), "snapshot.%" PRIu64 ".lsn", lsn);
-	rc = sp_set(c, snapshot, snapshot_lsn);
+	rc = sp_set(c, snapshot, checkpoint_id);
 	if (rc == -1)
 		sophia_raise(env);
 }
@@ -336,7 +406,7 @@ static inline int
 sophia_snapshot_ready(void *env, int64_t lsn)
 {
 	/* get sophia lsn associated with snapshot */
-	char snapshot[32];
+	char snapshot[128];
 	snprintf(snapshot, sizeof(snapshot), "snapshot.%" PRIu64 ".lsn", lsn);
 	void *c = sp_ctl(env);
 	void *o = sp_get(c, snapshot);
@@ -363,7 +433,7 @@ sophia_snapshot_ready(void *env, int64_t lsn)
 static inline void
 sophia_delete_checkpoint(void *env, int64_t lsn)
 {
-	char snapshot[32];
+	char snapshot[128];
 	snprintf(snapshot, sizeof(snapshot), "snapshot.%" PRIu64, lsn);
 	void *c = sp_ctl(env);
 	void *s = sp_get(c, snapshot);
@@ -378,13 +448,28 @@ sophia_delete_checkpoint(void *env, int64_t lsn)
 }
 
 void
-SophiaEngine::begin_recover_snapshot(int64_t lsn)
+SophiaEngine::recoverToCheckpoint(int64_t checkpoint_id)
 {
-	sophia_snapshot_recover(env, lsn);
+	/*
+	 * Create a reference to the "current" snapshot,
+	 * to ensure correct reference counting when a new
+	 * snapshot is created.
+	 * Sophia doesn't store snapshot references persistently,
+	 * so, after recovery, we remember the reference to the
+	 * "previous" snapshot, so that when the next snapshot is
+	 * taken, this reference is garbage collected. This
+	 * will also prevent this snapshot from accidental
+	 * garbage collection before a new snapshot is created,
+	 * and thus ensure correct crash recovery in case of crash
+	 * in the period between startup and creation of the first
+	 * snapshot.
+	 */
+	sophia_reference_checkpoint(env, checkpoint_id);
+	m_prev_checkpoint_lsn = checkpoint_id;
 }
 
 int
-SophiaEngine::begin_checkpoint(int64_t lsn)
+SophiaEngine::beginCheckpoint(int64_t lsn)
 {
 	assert(m_checkpoint_lsn == -1);
 	if (lsn != m_prev_checkpoint_lsn) {
@@ -397,7 +482,7 @@ SophiaEngine::begin_checkpoint(int64_t lsn)
 }
 
 int
-SophiaEngine::wait_checkpoint()
+SophiaEngine::waitCheckpoint()
 {
 	assert(m_checkpoint_lsn != -1);
 	while (! sophia_snapshot_ready(env, m_checkpoint_lsn))
@@ -406,7 +491,7 @@ SophiaEngine::wait_checkpoint()
 }
 
 void
-SophiaEngine::commit_checkpoint()
+SophiaEngine::commitCheckpoint()
 {
 	if (m_prev_checkpoint_lsn >= 0)
 		sophia_delete_checkpoint(env, m_prev_checkpoint_lsn);
@@ -415,7 +500,7 @@ SophiaEngine::commit_checkpoint()
 }
 
 void
-SophiaEngine::abort_checkpoint()
+SophiaEngine::abortCheckpoint()
 {
 	if (m_checkpoint_lsn >= 0) {
 		sophia_delete_checkpoint(env, m_checkpoint_lsn);

@@ -1,6 +1,8 @@
 
 -- snapshot
 
+os.execute("rm -f *.snap")
+os.execute("rm -f *.xlog")
 os.execute("touch mt")
 
 --# stop server default
